@@ -9,6 +9,7 @@ import kotlin.reflect.KMutableProperty1
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
+import kotlin.reflect.jvm.jvmName
 
 open class MusicApp(
     private val pluginClasspath: List<File>,
@@ -21,13 +22,17 @@ open class MusicApp(
          *       Обратите внимание на cлучаи, когда необходимо выбрасывать исключения
          *       [IllegalPluginException] и [PluginClassNotFoundException].
          **/
-        plugins.forEach {plugin ->
+        plugins.forEach { plugin ->
             val dataFolder = File("plugin_data")
             if (!dataFolder.exists()) {
                 dataFolder.mkdir()
             }
             val pluginFile = File("plugin_data/" + plugin.pluginId)
-            plugin.init(pluginFile.inputStream())
+            if (pluginFile.exists()) {
+                plugin.init(pluginFile.inputStream())
+            } else {
+                plugin.init(null)
+            }
         }
         musicLibrary // access to initialize
         player.init()
@@ -49,7 +54,8 @@ open class MusicApp(
         }
     }
 
-    private val pluginClassLoader: ClassLoader = URLClassLoader(pluginClasspath.map {it.toURI().toURL() }.toTypedArray());
+    private val pluginClassLoader: ClassLoader =
+        URLClassLoader(pluginClasspath.map { it.toURI().toURL() }.toTypedArray());
 
     private val plugins: List<MusicPlugin> by lazy {
         /**
@@ -58,20 +64,22 @@ open class MusicApp(
          *      Эта функция не должна вызывать [MusicPlugin.init]
          */
         enabledPluginClasses.map {
-            val loadedClass = pluginClassLoader.loadClass(it) ?: throw PluginClassNotFoundException(it);
-            val kclass = loadedClass.kotlin
-            if (!kclass.isSubclassOf(MusicPlugin::class)) {
+            val loadedClass = try {
+                pluginClassLoader.loadClass(it)
+            } catch (e: ClassNotFoundException) {
                 throw PluginClassNotFoundException(it)
             }
-            val primaryConstructor = kclass.primaryConstructor ?: throw IllegalPluginException(loadedClass)
-            if (primaryConstructor.parameters.size== 1) {
-                primaryConstructor.call(this) as MusicPlugin
+            val kclass = loadedClass.kotlin
+            if (!kclass.isSubclassOf(MusicPlugin::class)) {
+                throw IllegalPluginException(loadedClass)
             }
-            else {
-                val appProperty = kclass.memberProperties.
-                    filterIsInstance<KMutableProperty<MusicPlugin>>().
-                    find  {it.returnType == MusicApp::class::qualifiedName &&
-                            it.name == "musicAppInstance"} ?: throw IllegalPluginException(loadedClass)
+            val primaryConstructor = kclass.primaryConstructor ?: throw IllegalPluginException(loadedClass)
+            if (primaryConstructor.parameters.size == 1) {
+                primaryConstructor.call(this) as MusicPlugin
+            } else {
+                val appProperty = kclass.memberProperties.filterIsInstance<KMutableProperty<MusicPlugin>>().find {
+                    it.name == "musicAppInstance"
+                } ?: throw IllegalPluginException(loadedClass)
                 if (primaryConstructor.parameters.size != 0) {
                     throw IllegalPluginException(loadedClass)
                 }
@@ -79,11 +87,12 @@ open class MusicApp(
                 appProperty.setter.call(musicPl, this)
                 musicPl
             }
+
         }
     }
 
     fun findSinglePlugin(pluginClassName: String): MusicPlugin? =
-        plugins.singleOrNull {plugin -> plugin::class.qualifiedName == pluginClassName}
+        plugins.singleOrNull { plugin -> plugin::class.qualifiedName == pluginClassName }
 
     fun <T : MusicPlugin> getPlugins(pluginClass: Class<T>): List<T> =
         plugins.filterIsInstance(pluginClass)
@@ -111,7 +120,8 @@ open class MusicApp(
             PlaylistPosition(
                 playlist,
                 fromPosition
-            ), isResumed = false)
+            ), isResumed = false
+        )
     }
 
     fun nextOrStop() = player.playbackState.playlistPosition?.let {
